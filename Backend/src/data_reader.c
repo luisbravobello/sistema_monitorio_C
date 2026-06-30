@@ -4,10 +4,10 @@
 #include <time.h>
 #include "data_reader.h"
 
-/* Formato esperado de cada línea del log:
-   timestamp src_ip src_port dst_ip dst_port protocol size
-   Ejemplo: 1700000000 192.168.1.1 54321 10.0.0.1 22 TCP 64
-*/
+/* * Formato esperado en cada línea del archivo log:
+ * timestamp src_ip src_port dst_ip dst_port protocol size
+ * Ejemplo: 1700000000 192.168.1.1 54321 10.0.0.1 22 TCP 64
+ */
 
 int data_reader_from_log(const char *filepath, NetworkPacket *out_packets, int max_packets) {
     FILE *f = fopen(filepath, "r");
@@ -33,8 +33,8 @@ int data_reader_from_log(const char *filepath, NetworkPacket *out_packets, int m
 }
 
 /* ---------------------------------------------------------------- */
-/* Captura en vivo: implementación con pcap si está disponible,      */
-/* fallback a simulación con datos de prueba si no.                  */
+/* Captura en vivo: usa la librería pcap si está instalada.         */
+/* Si no la encuentra, usa un simulador interno con datos de prueba.*/
 /* ---------------------------------------------------------------- */
 
 static volatile int g_stop_capture = 0;
@@ -51,7 +51,8 @@ static pcap_t *g_handle = NULL;
 static void pcap_callback(u_char *args, const struct pcap_pkthdr *header,
                           const u_char *packet) {
     (void)args;
-    /* Saltar Ethernet header (14 bytes) */
+    
+    /* Salta la cabecera Ethernet (14 bytes) para leer directo la IP */
     const struct ip *ip_hdr = (const struct ip *)(packet + 14);
     if ((size_t)header->caplen < 14 + sizeof(struct ip)) return;
 
@@ -60,7 +61,7 @@ static void pcap_callback(u_char *args, const struct pcap_pkthdr *header,
     np.timestamp = (time_t)header->ts.tv_sec;
     np.size      = (int)header->len;
 
-    /* IP origen/destino */
+    /* Extrae las direcciones IP de origen y destino */
     snprintf(np.src_ip, sizeof(np.src_ip), "%s", inet_ntoa(ip_hdr->ip_src));
     snprintf(np.dst_ip, sizeof(np.dst_ip), "%s", inet_ntoa(ip_hdr->ip_dst));
 
@@ -100,8 +101,10 @@ void data_reader_stop_capture(void) {
 }
 
 #else
-/* Sin libpcap: simulación con paquetes de prueba para poder testear  */
-/* el resto del sistema (viewmodel, detector, API) sin hardware real. */
+
+/* * Modo simulación (cuando no hay libpcap).
+ * Genera tráfico de red falso para poder probar la API y el detector sin hardware real.
+ */
 
 #ifdef _WIN32
   #include <windows.h>
@@ -109,7 +112,6 @@ void data_reader_stop_capture(void) {
 #else
   #include <unistd.h>
 #endif
-
 
 static void (*g_on_packet_sim)(NetworkPacket *) = NULL;
 
@@ -134,9 +136,12 @@ int data_reader_start_capture(const char *device, void (*on_packet)(NetworkPacke
         np.src_port = 1024 + rand() % 60000;
         np.dst_port = SAMPLE_DPORTS[i % 8];
         np.size     = 40 + rand() % 1460;
+        
         if (g_on_packet_sim) g_on_packet_sim(&np);
         i++;
-        usleep(200000); /* 5 paquetes/segundo */
+        
+        /* Pausa para simular un tráfico de 5 paquetes por segundo */
+        usleep(200000); 
     }
     return 0;
 }

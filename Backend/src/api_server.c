@@ -19,7 +19,7 @@
   }
   #define pthread_create(t,a,fn,arg) _win_pthread_create(t,fn,arg)
   #define pthread_join(t,v)        WaitForSingleObject(t,INFINITE)
-  /* strtok_r no existe en MinGW */
+  /* Equivalente de strtok_r para entornos MinGW */
   static char *strtok_r(char *s, const char *d, char **p) {
       if (s) *p = s;
       if (!*p) return NULL;
@@ -30,10 +30,10 @@
       if (**p) { **p = '\0'; (*p)++; }
       return tok;
   }
-  /* read/write sobre SOCKETs en Winsock */
+  /* Operaciones de lectura y escritura para SOCKETs en Winsock */
   #define read(s,b,n)  recv(s,(char*)(b),(int)(n),0)
   #define write(s,b,n) send(s,(const char*)(b),(int)(n),0)
-  /* ssize_t */
+  /* Tipo ssize_t */
   typedef int ssize_t;
 #else
   #include <unistd.h>
@@ -51,42 +51,35 @@
 #include "viewmodel.h"
 
 /*
- * Implementación mínima de servidor HTTP/1.1 sobre sockets POSIX.
- * No hay concurrencia entre requests (se atienden uno por uno, en el
- * mismo hilo del accept() loop) — para la cantidad de peticiones que
- * hace la UI de PySide6 (un timer cada 2s) es más que suficiente, y
- * mantiene el código simple. La única concurrencia real del proyecto
- * es entre ESTE hilo y el hilo de captura, y para eso sí usamos un
- * mutex (g_events_mutex).
+ Servidor HTTP/ básico con sockets POSIX.
+ Procesa las peticiones una por una de forma secuencial para el flujo de la UI.
  */
 
 #define MAX_EVENTS       500
 #define REQUEST_BUF_SIZE 8192
 #define DEFAULT_DEVICE   "any"
 
-/* ---------------------------------------------------------------- */
-/* Estado compartido: el arreglo de ThreatEvent y su mutex.          */
-/* Vive como variables estáticas de este archivo: no hace falta que  */
-/* main.c las inicialice a mano (el TODO original quedó resuelto     */
-/* así: PTHREAD_MUTEX_INITIALIZER + arreglo en memoria estática ya   */
-/* arrancan en cero, listos para usarse desde el primer request).    */
-/* ---------------------------------------------------------------- */
+
+// Estado compartido: arreglo de ThreatEvent y su mutex.            
+// Son estáticos y se inicializan automáticamente en memoria,       
+// por lo que no requieren inicialización manual desde main.c.      
+
 
 static ThreatEvent     g_events[MAX_EVENTS];
-static int              g_event_count = 0;
-static pthread_mutex_t g_events_mutex; /* init en api_server_start */
+static int             g_event_count = 0;
+static pthread_mutex_t g_events_mutex; 
 
-static volatile int g_server_running = 0;  /* controla el loop de accept() */
-static volatile int g_capturing      = 0;  /* hay una captura en curso     */
+static volatile int g_server_running = 0;  /* Estado del bucle del servidor */
+static volatile int g_capturing      = 0;  /* Estado de la captura actual */
 static pthread_t    g_capture_thread;
-static char          g_capture_device[64] = DEFAULT_DEVICE;
+static char         g_capture_device[64] = DEFAULT_DEVICE;
 
 static int g_listen_fd = -1;
 
-/* ---------------------------------------------------------------- */
-/* Captura: conecta data_reader (paquetes crudos) con detector       */
-/* (análisis) y mete los hallazgos en el arreglo compartido.         */
-/* ---------------------------------------------------------------- */
+
+// Captura: enlaza con data_reader con detector para analizar los paquetes  
+// y guarda las amenazas encontradas en el arreglo compartido.      
+
 
 void api_server_clear_events(void) {
     pthread_mutex_lock(&g_events_mutex);
@@ -99,8 +92,7 @@ void api_server_add_event(const ThreatEvent *event) {
     if (g_event_count < MAX_EVENTS) {
         g_events[g_event_count++] = *event;
     }
-    /* Si se llena el buffer se descartan eventos nuevos. Para un
-     * proyecto real convendría un buffer circular; para esto alcanza. */
+    /* Si el buffer se llena, se descartan los eventos nuevos. */
     pthread_mutex_unlock(&g_events_mutex);
 }
 
@@ -113,18 +105,13 @@ static void on_packet_captured(NetworkPacket *packet) {
 
 static void *capture_thread_main(void *arg) {
     (void)arg;
-    /* data_reader_start_capture bloquea (pcap_loop) hasta que alguien
-     * llame a data_reader_stop_capture(). Mientras esa función siga
-     * siendo un TODO sin implementar, vuelve enseguida — pero el hilo
-     * y el cableado ya están listos para cuando se complete. */
+    /* Inicia y bloquea la ejecución hasta que se detenga la captura de paquetes. */
     data_reader_start_capture(g_capture_device, on_packet_captured);
     g_capturing = 0;
     return NULL;
 }
 
-/* ---------------------------------------------------------------- */
-/* HTTP: parsing mínimo de request line y query string.              */
-/* ---------------------------------------------------------------- */
+// HTTP: procesamiento básico de la petición y sus parámetros. 
 
 typedef struct {
     char method[8];
@@ -132,8 +119,7 @@ typedef struct {
     char query[256];
 } HttpRequest;
 
-/* Decodifica %XX y '+' en el lugar. Alcanza para los valores típicos
- * (IPs, puertos) que manda requests.get(..., params=...) en Python. */
+/* Decodifica caracteres especiales (%XX y '+') de la URL directamente en la cadena. */
 static void url_decode(char *s) {
     char *src = s, *dst = s;
     while (*src) {
@@ -200,10 +186,9 @@ static void send_response(int client_fd, int status, const char *status_text, co
     write(client_fd, body, (size_t)body_len);
 }
 
-/* ---------------------------------------------------------------- */
-/* Un handler por endpoint, igual que pide la documentación del      */
-/* contrato de API (ver docs/API_CONTRACT.md).                       */
-/* ---------------------------------------------------------------- */
+/*  */
+/* Controladores para cada endpoint según docs/API_CONTRACT.md.     */
+/*  */
 
 static void handle_start(int client_fd, const HttpRequest *req) {
     if (strcmp(req->method, "POST") != 0) {
@@ -256,7 +241,7 @@ static void handle_events(int client_fd) {
 
 static void handle_alerts(int client_fd) {
     pthread_mutex_lock(&g_events_mutex);
-    /* viewmodel_alerts_to_json copia y ordena internamente — no mutamos g_events */
+    /* Se hace una copia y se ordena internamente para no alterar g_events. */
     char *json = viewmodel_alerts_to_json(g_events, g_event_count);
     pthread_mutex_unlock(&g_events_mutex);
 
@@ -280,12 +265,8 @@ static void handle_search(int client_fd, const HttpRequest *req) {
     int has_port = get_query_param(req->query, "port", port_str, sizeof(port_str));
     int port = has_port ? atoi(port_str) : -1;
 
-    /* search_linear_by_ip / search_binary_by_timestamp (search.c) están
-     * pensadas para devolver UN índice (son el ejercicio de búsqueda
-     * lineal/binaria). Este endpoint necesita devolver una LISTA de
-     * eventos que cumplan ip y/o puerto, así que filtramos a mano sobre
-     * el arreglo completo en vez de llamarlas — son pocos eventos, no
-     * hace falta más. */
+    /* Filtra manualmente el arreglo completo para devolver una lista de eventos 
+     * que coincidan con la IP o el puerto solicitados. */
     pthread_mutex_lock(&g_events_mutex);
 
     ThreatEvent matches[MAX_EVENTS];
@@ -352,9 +333,8 @@ static void handle_client(int client_fd) {
 }
 
 /* ---------------------------------------------------------------- */
-/* Loop principal: accept() con timeout para poder revisar           */
-/* g_server_running y salir de forma prolija cuando llamen a         */
-/* api_server_stop() desde otro hilo.                                 */
+/* Ciclo principal: acepta conexiones usando un timeout para        */
+/* verificar g_server_running y poder cerrarse de forma segura.     */
 /* ---------------------------------------------------------------- */
 
 void api_server_start(int port) {
@@ -407,7 +387,7 @@ void api_server_start(int port) {
             if (errno == EINTR) continue;
             break;
         }
-        if (ready == 0) continue; /* timeout: vuelve a chequear g_server_running */
+        if (ready == 0) continue; /* Timeout: vuelve a comprobar si el servidor sigue corriendo */
 
         struct sockaddr_in client_addr;
         socklen_t client_len = sizeof(client_addr);

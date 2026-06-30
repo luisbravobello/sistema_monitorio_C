@@ -3,16 +3,16 @@
 #include "detector.h"
 
 /*
- * Detector simple con ventana de tiempo.
- * Mantiene un historial reducido en memoria estática para detectar
- * PORT_SCAN (muchos dst_port distintos desde mismo src_ip) y
- * SSH_BRUTE (muchos paquetes a puerto 22 desde mismo src_ip).
+ * Detector basado en una ventana de tiempo.
+ * Mantiene un registro corto en memoria para identificar ataques en curso:
+ * escaneos de puertos (PORT_SCAN) o fuerza bruta por SSH (SSH_BRUTE) 
+ * provenientes de una misma IP de origen.
  */
 
 #define HISTORY_SIZE 256
 #define WINDOW_SECS  10
-#define PORTSCAN_THRESHOLD  5   /* puertos distintos en la ventana */
-#define SSHBRUTE_THRESHOLD  4   /* conexiones a :22 en la ventana  */
+#define PORTSCAN_THRESHOLD  5   /* Puertos distintos en la ventana */
+#define SSHBRUTE_THRESHOLD  4   /* Conexiones al puerto 22 en la ventana */
 
 typedef struct {
     char   src_ip[46];
@@ -26,14 +26,15 @@ static int       g_hist_pos = 0;
 int detector_analyze(const NetworkPacket *packet, ThreatEvent *out_event) {
     time_t now = packet->timestamp;
 
-    /* Guardar en historial circular */
+    /* Registra el paquete actual sobreescribiendo los datos más antiguos del historial */
     g_history[g_hist_pos % HISTORY_SIZE].ts       = now;
     g_history[g_hist_pos % HISTORY_SIZE].dst_port = packet->dst_port;
     strncpy(g_history[g_hist_pos % HISTORY_SIZE].src_ip, packet->src_ip, 45);
     g_hist_pos++;
 
     int ssh_count  = 0;
-    int port_set[1024]; int nports = 0;
+    int port_set[1024]; 
+    int nports = 0;
 
     for (int i = 0; i < HISTORY_SIZE; i++) {
         HistEntry *h = &g_history[i];
@@ -41,10 +42,10 @@ int detector_analyze(const NetworkPacket *packet, ThreatEvent *out_event) {
         if (now - h->ts > WINDOW_SECS) continue;
         if (strcmp(h->src_ip, packet->src_ip) != 0) continue;
 
-        /* SSH brute */
+        /* Cuenta las conexiones al puerto 22 para detectar ataques SSH */
         if (h->dst_port == 22) ssh_count++;
 
-        /* Port scan: contar puertos distintos */
+        /* Cuenta la cantidad de puertos diferentes para detectar el escaneo */
         int found = 0;
         for (int p = 0; p < nports; p++)
             if (port_set[p] == h->dst_port) { found = 1; break; }

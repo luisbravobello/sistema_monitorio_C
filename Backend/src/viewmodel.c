@@ -7,6 +7,10 @@
 #define EVENT_JSON_SIZE 256
 #define HEADER_SIZE     32
 
+
+ //Función interna que calcula la memoria necesaria y construye el texto JSON
+// concatenando los datos de cada evento del arreglo.
+ 
 static char *events_to_json_internal(ThreatEvent *events, int n) {
     if (n == 0) {
         char *out = malloc(3);
@@ -31,9 +35,16 @@ static char *events_to_json_internal(ThreatEvent *events, int n) {
     return out;
 }
 
+
+//Convierte y devuelve la lista completa de eventos a formato JSON sin aplicar filtros.
+ 
 char *viewmodel_events_to_json(ThreatEvent *events, int n) {
     return events_to_json_internal(events, n);
 }
+
+
+//Genera el JSON exclusivamente de las amenazas confirmadas y ordenadas por nivel de riesgo.
+//Trabaja sobre una copia temporal para no desordenar el arreglo principal de la aplicación.
 
 char *viewmodel_alerts_to_json(ThreatEvent *events, int n) {
     /* Copiar para no mutar el arreglo original */
@@ -41,16 +52,24 @@ char *viewmodel_alerts_to_json(ThreatEvent *events, int n) {
     if (!copy) { char *o = malloc(3); strcpy(o, "[]"); return o; }
     memcpy(copy, events, (size_t)n * sizeof(ThreatEvent));
     sort_by_severity(copy, n);
-    /* Solo confirmed == 1 */
+    
+    /* Filtrar dejando solo las amenazas confirmadas (confirmed == 1) */
     ThreatEvent *filtered = malloc((size_t)n * sizeof(ThreatEvent));
     int fc = 0;
     for (int i = 0; i < n; i++)
         if (copy[i].confirmed) filtered[fc++] = copy[i];
+        
     char *out = events_to_json_internal(filtered, fc);
+    
+    /* Liberar la memoria temporal utilizada */
     free(copy); free(filtered);
     return out;
 }
 
+
+ // Analiza todos los eventos registrados para contar cuántos ataques hay de cada tipo 
+ // y cuántos corresponden a cada nivel de severidad, agrupándolos en un JSON de resumen.
+ 
 char *viewmodel_statistics_to_json(ThreatEvent *events, int n) {
     /* Contar por tipo y severidad */
     typedef struct { char tipo[32]; int count; } TipoCount;
@@ -58,7 +77,7 @@ char *viewmodel_statistics_to_json(ThreatEvent *events, int n) {
     int por_sev[6] = {0};  /* índices 1..5 */
 
     for (int i = 0; i < n; i++) {
-        /* Por tipo */
+        /* Agrupar por tipo de amenaza */
         int found = 0;
         for (int t = 0; t < ntypes; t++) {
             if (strcmp(tipos[t].tipo, events[i].threat_type) == 0) {
@@ -70,7 +89,8 @@ char *viewmodel_statistics_to_json(ThreatEvent *events, int n) {
             tipos[ntypes].tipo[31] = '\0';
             tipos[ntypes++].count = 1;
         }
-        /* Por severidad */
+        
+        /* Agrupar por nivel de severidad */
         int s = events[i].severity;
         if (s >= 1 && s <= 5) por_sev[s]++;
     }
