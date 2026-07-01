@@ -272,19 +272,7 @@ Con soporte de captura en vivo (pcap):
 gcc -std=c11 -Iinclude -DHAVE_PCAP src/*.c -o monitor.exe -lws2_32 -lwpcap
 ```
 
-### 6.3 Compilación en Linux / macOS
-
-```bash
-gcc -std=c11 -Iinclude src/*.c -o monitor -lpthread
-```
-
-Con soporte de captura en vivo (pcap):
-
-```bash
-gcc -std=c11 -Iinclude -DHAVE_PCAP src/*.c -o monitor -lpthread -lpcap
-```
-
-### 6.4 Ejecución
+### 6.3 Ejecución
 
 ```bash
 # Backend
