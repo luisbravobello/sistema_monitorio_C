@@ -143,7 +143,7 @@ cd Backend
 gcc -Wall -Iinclude src/main.c src/api_server.c src/data_reader.c src/detector.c src/search.c src/sort.c src/viewmodel.c -o monitor.exe -lws2_32
 .\monitor.exe
 ```
-# UI (Python) **
+# UI (Python) 
 ```bash
 cd UI
 pip install -r requirements.txt
