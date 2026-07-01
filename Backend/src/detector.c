@@ -52,7 +52,8 @@ int detector_analyze(const NetworkPacket *packet, ThreatEvent *out_event) {
         if (!found && nports < 1024) port_set[nports++] = h->dst_port;
     }
 
-    if (ssh_count >= SSHBRUTE_THRESHOLD) {
+    /* Solo confirma SSH_BRUTE si el paquete actual va al puerto 22 */
+    if (packet->dst_port == 22 && ssh_count >= SSHBRUTE_THRESHOLD) {
         out_event->packet = *packet;
         strncpy(out_event->threat_type, "SSH_BRUTE", sizeof(out_event->threat_type) - 1);
         out_event->severity  = 4;

@@ -1,6 +1,7 @@
 #include <string.h>
 #include "search.h"
-
+#include <time.h>
+#include "models.h"
 /*
  * Busca un evento por su dirección IP de origen.
  */
