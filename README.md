@@ -148,4 +148,4 @@ python main.py
 
 ## Documentación completa
 
-Para la especificación de requisitos, arquitectura, diseño y decisiones técnicas, ver [`docs/ERS.md`](docs/ERS.md).
+Para la especificación de requisitos, arquitectura, diseño y decisiones técnicas, ver [`docs/Documentacion.md`](docs/Documentacion.md).
