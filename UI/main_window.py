@@ -1,264 +1,386 @@
-"""
-main_window.py
---------------
-La ventana principal de la UI.
-
-Se construye por capas:
-    5a) Estructura base + panel de control
-    5b) (splash.py, archivo aparte)
-    5c) Barra de herramientas + tarjetas de estadisticas  <- estamos aqui
-    5d) Pestanas Eventos / Alertas con tabla y buscador integrado
-    5e) Tema oscuro completo (tablas, pestanas)
-    5f) Doble clic en fila -> ventana de detalle
-
-Esta clase NUNCA importa `requests` directamente: todo pasa por
-api_client.py, para que si el backend cambia, solo se toque ese archivo.
-"""
-
-import requests
-from PySide6.QtCore import Qt, QTimer
+from datetime import datetime
+from PySide6.QtCore import QTimer, QThread, Signal, Qt, QAbstractTableModel, QModelIndex
+from PySide6.QtGui import QColor, QBrush
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QLineEdit, QStatusBar, QFrame, QMessageBox,
+    QPushButton, QTableView, QHeaderView,
+    QLabel, QStatusBar, QTabWidget, QLineEdit, QDialog,
+    QDialogButtonBox, QFormLayout, QFrame,
 )
+from api_client import ApiClient
 
-import api_client
-from models import Evento, Estadisticas
-
-# Cada cuanto se refrescan las tarjetas/tablas automaticamente (ms)
-INTERVALO_REFRESH_MS = 2500
-
-# Colores de acento (mi propia paleta, no calcada del mockup de Luis)
-COLOR_FONDO = "#1c1e26"
-COLOR_TARJETA = "#262a35"
-COLOR_TEXTO = "#e6e6e6"
-COLOR_TEXTO_SECUNDARIO = "#8a94a6"
-COLOR_ACENTO = "#3b82f6"        # azul, en vez del verde del mockup
-COLOR_ALERTA = "#f59e0b"        # ambar, para "Alertas activas"
-COLOR_CRITICO = "#ef4444"       # rojo, para "Severidad >= 4"
-COLOR_INFO = "#22c55e"          # verde, para "Tipos detectados"
+SEV_COLORS = {1:"#4a90d9", 2:"#27ae60", 3:"#f39c12", 4:"#e67e22", 5:"#e74c3c"}
+SEV_LABELS = {1:"Baja",    2:"Media",   3:"Alta",    4:"Crítica", 5:"Máxima"}
+EV_COLS  = ["#", "IP Origen", "Puerto", "Tipo", "Severidad", "Fecha / Hora"]
+ALT_COLS = ["#", "IP Origen", "Puerto", "Tipo", "Severidad", "Confirmada", "Fecha / Hora"]
 
 
-class TarjetaEstadistica(QFrame):
-    """Una tarjeta individual tipo dashboard: un numero grande + una
-    etiqueta debajo. Se actualiza llamando a .set_valor(nuevo_numero)."""
+def _fmt_ts(ts):
+    try:    return datetime.fromtimestamp(int(ts)).strftime("%Y-%m-%d %H:%M:%S")
+    except: return str(ts)
 
-    def __init__(self, titulo: str, color: str):
+
+# ── Modelo de tabla virtual (solo renderiza filas visibles) ──────────────────
+class EventModel(QAbstractTableModel):
+    def __init__(self, cols, is_alert=False):
         super().__init__()
-        self.setStyleSheet(f"""
-            QFrame {{
-                background-color: {COLOR_TARJETA};
-                border-radius: 8px;
-            }}
-        """)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 12, 16, 12)
+        self._cols     = cols
+        self._is_alert = is_alert
+        self._rows     = []   # lista de dicts
 
-        self.label_valor = QLabel("0")
-        self.label_valor.setStyleSheet(f"color: {color}; font-size: 26px; font-weight: bold;")
+    def replace(self, rows):
+        self.beginResetModel()
+        self._rows = rows
+        self.endResetModel()
 
-        label_titulo = QLabel(titulo)
-        label_titulo.setStyleSheet(f"color: {COLOR_TEXTO_SECUNDARIO}; font-size: 11px;")
+    def rowCount(self, parent=QModelIndex()):    return len(self._rows)
+    def columnCount(self, parent=QModelIndex()): return len(self._cols)
 
-        layout.addWidget(self.label_valor)
-        layout.addWidget(label_titulo)
+    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+        if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
+            return self._cols[section]
+        return None
 
-    def set_valor(self, valor):
-        self.label_valor.setText(str(valor))
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        if not index.isValid():
+            return None
+        e   = self._rows[index.row()]
+        col = index.column()
+        sev = e['severidad']
+
+        if role == Qt.ItemDataRole.DisplayRole:
+            if self._is_alert:
+                vals = [
+                    e['id'],
+                    e['ip'],
+                    e['puerto'],
+                    e['tipo'],
+                    f"{SEV_LABELS.get(sev,'?')} ({sev})",
+                    "✔ Sí" if e.get('confirmed') else "✖ No",
+                    _fmt_ts(e['timestamp']),
+                ]
+            else:
+                vals = [
+                    e['id'],
+                    e['ip'],
+                    e['puerto'],
+                    e['tipo'],
+                    f"{SEV_LABELS.get(sev,'?')} ({sev})",
+                    _fmt_ts(e['timestamp']),
+                ]
+            return str(vals[col])
+
+        if role == Qt.ItemDataRole.ForegroundRole:
+            # Colorear columna Severidad
+            sev_col = 5 if self._is_alert else 4
+            if col == sev_col:
+                return QBrush(QColor(SEV_COLORS.get(sev, "#888")))
+            if self._is_alert and col == 5:
+                return QBrush(QColor("#27ae60" if e.get('confirmed') else "#888"))
+
+        if role == Qt.ItemDataRole.TextAlignmentRole:
+            center_cols = {0, 2, 4, 5, 6} if self._is_alert else {0, 2, 4, 5}
+            if col in center_cols:
+                return Qt.AlignmentFlag.AlignCenter
+
+        return None
 
 
+def _make_view(model):
+    v = QTableView()
+    v.setModel(model)
+    v.horizontalHeader().setStretchLastSection(True)
+    v.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+    v.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)
+    v.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
+    v.setAlternatingRowColors(True)
+    v.verticalHeader().setVisible(False)
+    return v
+
+
+# ── Diálogo de detalle ───────────────────────────────────────────────────────
+class DetailDialog(QDialog):
+    def __init__(self, event, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(f"Detalle — Evento #{event['id']}")
+        self.setMinimumWidth(400)
+        lay = QFormLayout(self)
+        lay.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        sev = event['severidad']
+        for label, val, color in [
+            ("ID",         event['id'],      None),
+            ("IP Origen",  event['ip'],      None),
+            ("Puerto",     event['puerto'],  None),
+            ("Tipo",       event['tipo'],    None),
+            ("Severidad",  f"{SEV_LABELS.get(sev,'?')} ({sev})", SEV_COLORS.get(sev)),
+            ("Confirmada", "Sí" if event.get('confirmed') else "No", None),
+            ("Timestamp",  _fmt_ts(event['timestamp']), None),
+        ]:
+            lbl = QLabel(str(val))
+            if color: lbl.setStyleSheet(f"color:{color};font-weight:bold;")
+            lay.addRow(f"<b>{label}</b>", lbl)
+        sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
+        lay.addRow(sep)
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        btns.rejected.connect(self.reject)
+        lay.addRow(btns)
+
+
+# ── Worker de red (hilo secundario) ─────────────────────────────────────────
+class ApiWorker(QThread):
+    done = Signal(object, str)
+
+    def __init__(self, fn, action):
+        super().__init__()
+        self.fn     = fn
+        self.action = action
+        self.setTerminationEnabled(False)
+
+    def run(self):
+        try:    self.done.emit(self.fn(), self.action)
+        except Exception as e: self.done.emit({"error": str(e)}, self.action)
+
+    def cleanup(self):
+        self.wait(2000)
+        if not self.isFinished():
+            self.quit()
+
+
+# ── Ventana principal ────────────────────────────────────────────────────────
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Monitor de Amenazas de Red")
-        self.resize(1000, 680)
-        self.setStyleSheet(f"QMainWindow {{ background-color: {COLOR_FONDO}; }}")
+        self.setWindowTitle("Monitor de Amenazas en Red")
+        self.resize(1100, 680)
+        self.api          = ApiClient()
+        self._worker      = None
+        self._aux_workers = []
+        self._events      = []
+        self._alerts      = []
+        self._last_hash   = (-1, -1)
 
-        self.capturando = False
-
-        self._construir_ui()
-
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self._refrescar)
-        self.timer.start(INTERVALO_REFRESH_MS)
-        self._refrescar()  # primera carga inmediata
-
-    # ------------------------------------------------------------------
-    def _construir_ui(self):
         central = QWidget()
-        layout_principal = QVBoxLayout(central)
-        layout_principal.setContentsMargins(16, 16, 16, 8)
-        layout_principal.setSpacing(12)
+        root    = QVBoxLayout(central)
+        root.setSpacing(6)
+        root.setContentsMargins(8, 8, 8, 4)
 
-        layout_principal.addWidget(self._barra_control())
-        layout_principal.addWidget(self._fila_tarjetas())
-        layout_principal.addStretch()  # aqui van las pestanas en el paso 5d
+        # ── Botones ──────────────────────────────────────────────────
+        top = QHBoxLayout()
+        self.start_btn = QPushButton("▶  Iniciar captura")
+        self.stop_btn  = QPushButton("■  Detener")
+        self.stop_btn.setEnabled(False)
+        self.clear_btn = QPushButton("🗑  Limpiar")
+        self.start_btn.clicked.connect(self._on_start)
+        self.stop_btn.clicked.connect(self._on_stop)
+        self.clear_btn.clicked.connect(self._on_clear)
+        top.addWidget(self.start_btn)
+        top.addWidget(self.stop_btn)
+        top.addWidget(self.clear_btn)
+        top.addStretch()
+        root.addLayout(top)
 
+        # ── Tarjetas ─────────────────────────────────────────────────
+        sr = QHBoxLayout(); sr.setSpacing(8)
+        self._c_total  = self._card("Total eventos",    "—", "#4a90d9")
+        self._c_alerts = self._card("Alertas activas",  "—", "#e74c3c")
+        self._c_high   = self._card("Severidad ≥ 4",    "—", "#e67e22")
+        self._c_types  = self._card("Tipos detectados", "—", "#27ae60")
+        for c in [self._c_total, self._c_alerts, self._c_high, self._c_types]:
+            sr.addWidget(c)
+        root.addLayout(sr)
+
+        # ── Tabs ─────────────────────────────────────────────────────
+        tabs = QTabWidget()
+
+        # Tab eventos
+        te = QWidget(); le = QVBoxLayout(te); le.setSpacing(4)
+        fr = QHBoxLayout()
+        fr.addWidget(QLabel("IP:"))
+        self.f_ip   = QLineEdit(); self.f_ip.setPlaceholderText("10.0.0.1")
+        fr.addWidget(self.f_ip)
+        fr.addWidget(QLabel("Puerto:"))
+        self.f_port = QLineEdit(); self.f_port.setPlaceholderText("22"); self.f_port.setFixedWidth(70)
+        fr.addWidget(self.f_port)
+        b_search = QPushButton("Buscar");  b_search.clicked.connect(self._on_search)
+        b_clear  = QPushButton("Limpiar"); b_clear.clicked.connect(self._clear_filter)
+        fr.addWidget(b_search); fr.addWidget(b_clear); fr.addStretch()
+        le.addLayout(fr)
+        le.addWidget(QLabel("Doble clic → ver detalle", alignment=Qt.AlignmentFlag.AlignRight))
+        self._ev_model = EventModel(EV_COLS, is_alert=False)
+        self.ev_view   = _make_view(self._ev_model)
+        self.ev_view.doubleClicked.connect(self._detail_event)
+        le.addWidget(self.ev_view)
+        tabs.addTab(te, "📋  Eventos")
+
+        # Tab alertas
+        ta = QWidget(); la = QVBoxLayout(ta); la.setSpacing(4)
+        sr2 = QHBoxLayout(); sr2.addWidget(QLabel("Severidad mínima:"))
+        self.sev_btns = {}
+        for s in range(1, 6):
+            b = QPushButton(f"{s} — {SEV_LABELS[s]}")
+            b.setCheckable(True)
+            b.setStyleSheet(f"QPushButton:checked{{background:{SEV_COLORS[s]};color:white;}}")
+            b.clicked.connect(lambda _, sv=s: self._filter_alerts(sv))
+            sr2.addWidget(b); self.sev_btns[s] = b
+        sr2.addStretch(); la.addLayout(sr2)
+        la.addWidget(QLabel("Doble clic → ver detalle", alignment=Qt.AlignmentFlag.AlignRight))
+        self._alt_model = EventModel(ALT_COLS, is_alert=True)
+        self.alt_view   = _make_view(self._alt_model)
+        self.alt_view.doubleClicked.connect(self._detail_alert)
+        la.addWidget(self.alt_view)
+        tabs.addTab(ta, "🚨  Alertas")
+
+        root.addWidget(tabs)
         self.setCentralWidget(central)
 
-        self.status_bar = QStatusBar()
-        self.status_bar.setStyleSheet(f"color: {COLOR_TEXTO_SECUNDARIO};")
-        self.setStatusBar(self.status_bar)
-        self.status_bar.showMessage("Listo. Backend esperado en http://localhost:8080")
+        self.sb = QStatusBar(); self.setStatusBar(self.sb)
+        self.sb.showMessage("Desconectado — inicia el servidor C primero")
 
-    def _barra_control(self) -> QWidget:
-        """Fila superior con los 3 botones + campo de interfaz opcional."""
-        contenedor = QWidget()
-        layout = QHBoxLayout(contenedor)
-        layout.setContentsMargins(0, 0, 0, 0)
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._refresh)
+        self._timer.start(4000)
 
-        estilo_boton = f"""
-            QPushButton {{
-                background-color: {COLOR_TARJETA};
-                color: {COLOR_TEXTO};
-                border: none;
-                border-radius: 6px;
-                padding: 8px 14px;
-            }}
-            QPushButton:hover {{ background-color: #2f3440; }}
-            QPushButton:disabled {{ color: {COLOR_TEXTO_SECUNDARIO}; }}
-        """
+    # ── Helpers ──────────────────────────────────────────────────────
+    def _card(self, title, val, color):
+        f = QFrame(); f.setFrameShape(QFrame.Shape.StyledPanel)
+        f.setStyleSheet(f"QFrame{{border-left:4px solid {color};padding:4px 8px;}}")
+        l = QVBoxLayout(f); l.setSpacing(1)
+        v = QLabel(val); v.setStyleSheet(f"font-size:22px;font-weight:bold;color:{color};")
+        t = QLabel(title); t.setStyleSheet("font-size:11px;color:gray;")
+        l.addWidget(v); l.addWidget(t); f._v = v
+        return f
 
-        self.btn_iniciar = QPushButton("\u25b6 Iniciar captura")
-        self.btn_detener = QPushButton("\u25a0 Detener")
-        self.btn_limpiar = QPushButton("\U0001f5d1 Limpiar")
-        for b in (self.btn_iniciar, self.btn_detener, self.btn_limpiar):
-            b.setStyleSheet(estilo_boton)
-        self.btn_detener.setEnabled(False)
+    def _to_dict(self, i, e):
+        return {"id": i+1, "ip": e.ip, "puerto": e.puerto, "tipo": e.tipo,
+                "severidad": e.severidad, "timestamp": e.timestamp,
+                "confirmed": getattr(e, 'confirmed', 0)}
 
-        self.btn_iniciar.clicked.connect(self._on_iniciar)
-        self.btn_detener.clicked.connect(self._on_detener)
-        self.btn_limpiar.clicked.connect(self._on_limpiar)
+    def _run_aux(self, fn, action):
+        w = ApiWorker(fn, action)
+        w.done.connect(self._on_done)
+        w.finished.connect(lambda: self._aux_workers.remove(w) if w in self._aux_workers else None)
+        self._aux_workers.append(w)
+        w.start()
 
-        self.input_device = QLineEdit()
-        self.input_device.setPlaceholderText("interfaz (opcional, ej: eth0)")
-        self.input_device.setFixedWidth(180)
-        self.input_device.setStyleSheet(f"""
-            QLineEdit {{
-                background-color: {COLOR_TARJETA};
-                color: {COLOR_TEXTO};
-                border: none;
-                border-radius: 6px;
-                padding: 6px 10px;
-            }}
-        """)
-
-        layout.addWidget(self.btn_iniciar)
-        layout.addWidget(self.btn_detener)
-        layout.addWidget(self.btn_limpiar)
-        layout.addStretch()
-        layout.addWidget(self.input_device)
-        return contenedor
-
-    def _fila_tarjetas(self) -> QWidget:
-        """Las 4 tarjetas tipo dashboard, en fila."""
-        contenedor = QWidget()
-        layout = QHBoxLayout(contenedor)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
-
-        self.tarjeta_total = TarjetaEstadistica("Total eventos", COLOR_ACENTO)
-        self.tarjeta_alertas = TarjetaEstadistica("Alertas activas", COLOR_ALERTA)
-        self.tarjeta_criticos = TarjetaEstadistica("Severidad \u2265 4", COLOR_CRITICO)
-        self.tarjeta_tipos = TarjetaEstadistica("Tipos detectados", COLOR_INFO)
-
-        for t in (self.tarjeta_total, self.tarjeta_alertas, self.tarjeta_criticos, self.tarjeta_tipos):
-            layout.addWidget(t)
-        return contenedor
-
-    # ------------------------------------------------------------------
-    # Refresco automatico (timer)
-    # ------------------------------------------------------------------
-    def _refrescar(self):
-        """Trae /events, /alerts y /statistics, y actualiza las tarjetas.
-        (Las tablas se conectan en el paso 5d)."""
-        try:
-            eventos_raw = api_client.obtener_eventos()
-            alertas_raw = api_client.obtener_alertas()
-            stats_raw = api_client.obtener_estadisticas()
-        except requests.exceptions.ConnectionError:
-            self.status_bar.showMessage(
-                "\u26a0 No se puede conectar al backend. \u00bfEsta corriendo monitor.exe?"
-            )
+    # ── Refresh principal ─────────────────────────────────────────────
+    def _refresh(self):
+        if self._worker and self._worker.isRunning():
             return
-        except requests.exceptions.Timeout:
-            self.status_bar.showMessage("\u26a0 El backend tardo demasiado en responder (timeout).")
-            return
-        except requests.exceptions.RequestException as e:
-            self.status_bar.showMessage(f"\u26a0 Error al consultar el backend: {e}")
-            return
-
-        eventos = [Evento.desde_dict(e) for e in eventos_raw]
-        alertas = [Evento.desde_dict(e) for e in alertas_raw]
-        stats = Estadisticas.desde_dict(stats_raw)
-
-        self._actualizar_tarjetas(stats, alertas)
-        self.status_bar.showMessage(f"Conectado \u2014 {len(eventos)} eventos totales")
-
-    def _actualizar_tarjetas(self, stats: Estadisticas, alertas: list[Evento]):
-        self.tarjeta_total.set_valor(stats.total_paquetes)
-        self.tarjeta_alertas.set_valor(len(alertas))
-
-        # Severidad >= 4: sumar las cantidades de las claves "4" y "5"
-        # del dict amenazas_por_severidad (las claves llegan como texto)
-        criticos = sum(
-            cant for sev, cant in stats.amenazas_por_severidad.items()
-            if int(sev) >= 4
+        self._worker = ApiWorker(
+            lambda: (self.api.get_events(), self.api.get_alerts(), self.api.get_statistics()),
+            "refresh"
         )
-        self.tarjeta_criticos.set_valor(criticos)
+        self._worker.done.connect(self._on_done)
+        self._worker.start()
 
-        self.tarjeta_tipos.set_valor(len(stats.amenazas_por_tipo))
-
-    # ------------------------------------------------------------------
-    # Botones del panel de control
-    # ------------------------------------------------------------------
-    def _on_iniciar(self):
-        device = self.input_device.text().strip() or None
-        try:
-            resp = api_client.iniciar_captura(device)
-        except requests.exceptions.ConnectionError:
-            QMessageBox.warning(
-                self, "Sin conexion",
-                "No se pudo conectar al backend.\nCorre monitor.exe primero."
-            )
-            return
-        except requests.exceptions.Timeout:
-            QMessageBox.warning(
-                self, "Sin respuesta",
-                "El backend no respondio a tiempo (timeout).\n"
-                "Puede que /start este colgado del lado del backend."
-            )
-            return
-        except requests.exceptions.RequestException as e:
-            QMessageBox.warning(self, "Error", str(e))
+    # ── Handler central ───────────────────────────────────────────────
+    def _on_done(self, result, action):
+        if isinstance(result, dict) and "error" in result:
+            if action in ("start", "stop"):
+                self.sb.showMessage(f"Error: {result['error']}")
+                self.start_btn.setEnabled(True)
             return
 
-        self.capturando = True
-        self.btn_iniciar.setEnabled(False)
-        self.btn_detener.setEnabled(True)
-        self.status_bar.showMessage(f"Captura iniciada: {resp.get('status')}")
+        if action == "refresh":
+            events, alerts, stats = result
+            self._events = [self._to_dict(i, e) for i, e in enumerate(events)]
+            self._alerts = [self._to_dict(i, e) for i, e in enumerate(alerts)]
 
-    def _on_detener(self):
-        try:
-            resp = api_client.detener_captura()
-        except requests.exceptions.RequestException as e:
-            QMessageBox.warning(self, "Error", str(e))
-            return
+            h = (len(self._events), len(self._alerts))
+            if h != self._last_hash:
+                self._last_hash = h
+                self._ev_model.replace(self._events)
+                self._alt_model.replace(self._alerts)
+                high  = sum(1 for e in self._events if e['severidad'] >= 4)
+                tipos = len(set(e['tipo'] for e in self._events))
+                self._c_total._v.setText(str(len(self._events)))
+                self._c_alerts._v.setText(str(len(self._alerts)))
+                self._c_high._v.setText(str(high))
+                self._c_types._v.setText(str(tipos))
 
-        self.capturando = False
-        self.btn_iniciar.setEnabled(True)
-        self.btn_detener.setEnabled(False)
-        self.status_bar.showMessage(f"Captura detenida: {resp.get('status')}")
+            if stats:
+                self.sb.showMessage(
+                    f"Total: {stats.total_paquetes} paquetes  |  {datetime.now().strftime('%H:%M:%S')}")
+            elif events is not None:
+                self.sb.showMessage(f"Conectado — {datetime.now().strftime('%H:%M:%S')}")
+            else:
+                self.sb.showMessage("Sin conexión con el servidor C")
 
-    def _on_limpiar(self):
-        try:
-            api_client.limpiar_eventos()
-        except requests.exceptions.RequestException as e:
-            QMessageBox.warning(self, "Error", str(e))
-            return
-        self.status_bar.showMessage("Eventos limpiados en el backend")
+        elif action == "start":
+            self.stop_btn.setEnabled(True)
+            self.sb.showMessage("Capturando…")
+            self._last_hash = (-1, -1)
+            self._refresh()
 
-    # ------------------------------------------------------------------
+        elif action == "stop":
+            self.start_btn.setEnabled(True)
+            self.stop_btn.setEnabled(False)
+            self._clear_ui()
+            self.sb.showMessage("Detenido — registros limpiados")
+
+        elif action == "search":
+            self._ev_model.replace(result)
+
+        elif action == "clear_done":
+            self._clear_ui()
+            self.sb.showMessage("Registros limpiados")
+
+        elif action == "filter_alerts":
+            self._alt_model.replace(result)
+
+    # ── Detalles ─────────────────────────────────────────────────────
+    def _detail_event(self, index):
+        row = index.row()
+        if row < len(self._events): DetailDialog(self._events[row], self).exec()
+
+    def _detail_alert(self, index):
+        row = index.row()
+        if row < len(self._alerts): DetailDialog(self._alerts[row], self).exec()
+
+    # ── Filtros ──────────────────────────────────────────────────────
+    def _on_search(self):
+        ip   = self.f_ip.text().strip() or None
+        port = int(self.f_port.text()) if self.f_port.text().strip().isdigit() else None
+        snap = self._events[:]
+        self._run_aux(
+            lambda: [e for e in snap if (not ip or e['ip']==ip) and (not port or e['puerto']==port)],
+            "search"
+        )
+
+    def _clear_filter(self):
+        self.f_ip.clear(); self.f_port.clear()
+        self._ev_model.replace(self._events)
+
+    def _filter_alerts(self, min_sev):
+        for s, b in self.sev_btns.items(): b.setChecked(s == min_sev)
+        snap = self._alerts[:]
+        self._run_aux(lambda: [e for e in snap if e['severidad'] >= min_sev], "filter_alerts")
+
+    # ── Control ──────────────────────────────────────────────────────
+    def _clear_ui(self):
+        self._events = []; self._alerts = []
+        self._last_hash = (-1, -1)
+        self._ev_model.replace([])
+        self._alt_model.replace([])
+        for card in [self._c_total, self._c_alerts, self._c_high, self._c_types]:
+            card._v.setText("—")
+
+    def _on_clear(self):
+        self._run_aux(self.api.clear, "clear_done")
+
+    def _on_start(self):
+        self.start_btn.setEnabled(False)
+        self._run_aux(self.api.start, "start")
+
+    def _on_stop(self):
+        self.stop_btn.setEnabled(False)
+        self._run_aux(self.api.stop, "stop")
+
+    # ── Cleanup ──────────────────────────────────────────────────────
     def closeEvent(self, event):
-        self.timer.stop()
+        self._timer.stop()
+        if self._worker:
+            self._worker.cleanup()
+        for w in list(self._aux_workers):
+            w.cleanup()
         super().closeEvent(event)
