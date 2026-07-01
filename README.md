@@ -166,20 +166,6 @@ Con pcap:
 gcc -std=c11 -Iinclude -DHAVE_PCAP src/*.c -o monitor -lws2_32 -lwpcap
 ```
 
-### En Linux / macOS
-
-```bash
-gcc -std=c11 -Iinclude src/*.c -o monitor -lpthread
-```
-
-Con pcap:
-
-```bash
-gcc -std=c11 -Iinclude -DHAVE_PCAP src/*.c -o monitor -lpthread -lpcap
-```
-
----
-
 ## Ejecución
 
 ```bash
