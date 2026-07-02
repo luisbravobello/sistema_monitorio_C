@@ -36,16 +36,20 @@ class ApiClient:
     def stop(self) -> dict:
         return self._post("/stop")
 
-    def get_events(self) -> list[Evento]:
+    def get_events(self) -> list[Evento] | None:
         data = self._get_json("/events")
-        if not data:
-            return []
+        # None = fallo de conexion (backend caido/timeout).
+        # [] real del backend tambien pasaria por aca, pero como una
+        # lista vacia es "falsy" igual que None, usamos chequeo explicito
+        # con "is None" para no confundir ambos casos.
+        if data is None:
+            return None
         return [Evento.from_dict(e) for e in data]
 
-    def get_alerts(self) -> list[Evento]:
+    def get_alerts(self) -> list[Evento] | None:
         data = self._get_json("/alerts")
-        if not data:
-            return []
+        if data is None:
+            return None
         return [Evento.from_dict(e) for e in data]
 
     def get_statistics(self) -> Estadisticas | None:

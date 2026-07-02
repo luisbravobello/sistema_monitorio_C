@@ -33,6 +33,13 @@ class EventModel(QAbstractTableModel):
         self._rows = rows
         self.endResetModel()
 
+    def row_at(self, row: int):
+        """Devuelve el dict de la fila tal como se ve ACTUALMENTE en la
+        tabla (ya filtrada/buscada), no de la lista completa sin filtrar."""
+        if 0 <= row < len(self._rows):
+            return self._rows[row]
+        return None
+
     def rowCount(self, parent=QModelIndex()):    return len(self._rows)
     def columnCount(self, parent=QModelIndex()): return len(self._cols)
 
@@ -55,7 +62,7 @@ class EventModel(QAbstractTableModel):
                     e['ip'],
                     e['puerto'],
                     e['tipo'],
-                    f"{SEV_LABELS.get(sev,'?')} ({sev})",
+                    SEV_LABELS.get(sev, '?'),
                     "✔ Sí" if e.get('confirmed') else "✖ No",
                     _fmt_ts(e['timestamp']),
                 ]
@@ -65,17 +72,18 @@ class EventModel(QAbstractTableModel):
                     e['ip'],
                     e['puerto'],
                     e['tipo'],
-                    f"{SEV_LABELS.get(sev,'?')} ({sev})",
+                    SEV_LABELS.get(sev, '?'),
                     _fmt_ts(e['timestamp']),
                 ]
             return str(vals[col])
 
         if role == Qt.ItemDataRole.ForegroundRole:
-            # Colorear columna Severidad
-            sev_col = 5 if self._is_alert else 4
-            if col == sev_col:
+            # Columna Severidad esta en el indice 4 en AMBAS tablas
+            # (Eventos y Alertas), ya que "Confirmada" se agrego DESPUES
+            # de Severidad en ALT_COLS, no antes.
+            if col == 4:
                 return QBrush(QColor(SEV_COLORS.get(sev, "#888")))
-            if self._is_alert and col == 5:
+            if self._is_alert and col == 5:  # columna Confirmada
                 return QBrush(QColor("#27ae60" if e.get('confirmed') else "#888"))
 
         if role == Qt.ItemDataRole.TextAlignmentRole:
@@ -112,7 +120,7 @@ class DetailDialog(QDialog):
             ("IP Origen",  event['ip'],      None),
             ("Puerto",     event['puerto'],  None),
             ("Tipo",       event['tipo'],    None),
-            ("Severidad",  f"{SEV_LABELS.get(sev,'?')} ({sev})", SEV_COLORS.get(sev)),
+            ("Severidad",  SEV_LABELS.get(sev, '?'), SEV_COLORS.get(sev)),
             ("Confirmada", "Sí" if event.get('confirmed') else "No", None),
             ("Timestamp",  _fmt_ts(event['timestamp']), None),
         ]:
@@ -183,7 +191,7 @@ class MainWindow(QMainWindow):
         sr = QHBoxLayout(); sr.setSpacing(8)
         self._c_total  = self._card("Total eventos",    "—", "#4a90d9")
         self._c_alerts = self._card("Alertas activas",  "—", "#e74c3c")
-        self._c_high   = self._card("Severidad ≥ 4",    "—", "#e67e22")
+        self._c_high   = self._card("Severidad",    "—", "#e67e22")
         self._c_types  = self._card("Tipos detectados", "—", "#27ae60")
         for c in [self._c_total, self._c_alerts, self._c_high, self._c_types]:
             sr.addWidget(c)
@@ -217,7 +225,7 @@ class MainWindow(QMainWindow):
         sr2 = QHBoxLayout(); sr2.addWidget(QLabel("Severidad mínima:"))
         self.sev_btns = {}
         for s in range(1, 6):
-            b = QPushButton(f"{s} — {SEV_LABELS[s]}")
+            b = QPushButton(SEV_LABELS[s])
             b.setCheckable(True)
             b.setStyleSheet(f"QPushButton:checked{{background:{SEV_COLORS[s]};color:white;}}")
             b.clicked.connect(lambda _, sv=s: self._filter_alerts(sv))
@@ -283,8 +291,23 @@ class MainWindow(QMainWindow):
 
         if action == "refresh":
             events, alerts, stats = result
+
+            # Fix #2: si el backend no respondio, get_events()/get_alerts()
+            # devuelven None (no []) para distinguir "0 eventos reales"
+            # de "no hay conexion". Cortamos aqui y avisamos.
+            if events is None or alerts is None:
+                self.sb.showMessage("Sin conexión con el servidor C")
+                return
+
             self._events = [self._to_dict(i, e) for i, e in enumerate(events)]
             self._alerts = [self._to_dict(i, e) for i, e in enumerate(alerts)]
+
+            # Fix #4: /alerts del backend YA filtra solo eventos
+            # confirmados (SSH_BRUTE siempre es confirmed=1 del lado
+            # de C), asi que marcarlo aqui no es inventar el dato,
+            # es reflejar una garantia real de ese endpoint.
+            for a in self._alerts:
+                a['confirmed'] = 1
 
             h = (len(self._events), len(self._alerts))
             if h != self._last_hash:
@@ -301,10 +324,8 @@ class MainWindow(QMainWindow):
             if stats:
                 self.sb.showMessage(
                     f"Total: {stats.total_paquetes} paquetes  |  {datetime.now().strftime('%H:%M:%S')}")
-            elif events is not None:
-                self.sb.showMessage(f"Conectado — {datetime.now().strftime('%H:%M:%S')}")
             else:
-                self.sb.showMessage("Sin conexión con el servidor C")
+                self.sb.showMessage(f"Conectado — {datetime.now().strftime('%H:%M:%S')}")
 
         elif action == "start":
             self.stop_btn.setEnabled(True)
@@ -330,12 +351,12 @@ class MainWindow(QMainWindow):
 
     # ── Detalles ─────────────────────────────────────────────────────
     def _detail_event(self, index):
-        row = index.row()
-        if row < len(self._events): DetailDialog(self._events[row], self).exec()
+        e = self._ev_model.row_at(index.row())
+        if e: DetailDialog(e, self).exec()
 
     def _detail_alert(self, index):
-        row = index.row()
-        if row < len(self._alerts): DetailDialog(self._alerts[row], self).exec()
+        e = self._alt_model.row_at(index.row())
+        if e: DetailDialog(e, self).exec()
 
     # ── Filtros ──────────────────────────────────────────────────────
     def _on_search(self):
