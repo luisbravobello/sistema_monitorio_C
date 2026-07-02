@@ -328,8 +328,16 @@ class MainWindow(QMainWindow):
                 self._c_types._v.setText(str(tipos))
 
             if stats:
-                self.sb.showMessage(
-                    f"Total: {stats.total_paquetes} paquetes  |  {datetime.now().strftime('%H:%M:%S')}")
+                # Si la UI cree que sigue capturando pero el backend ya no
+                # (ej. alcanzó el límite de MAX_EVENTS y se autodetuvo),
+                # reflejamos el mismo estado que al pulsar "Detener".
+                if self.stop_btn.isEnabled() and not stats.capturando:
+                    self.start_btn.setEnabled(True)
+                    self.stop_btn.setEnabled(False)
+                    self.sb.showMessage("Límite de eventos alcanzado — captura detenida automáticamente")
+                else:
+                    self.sb.showMessage(
+                        f"Total: {stats.total_paquetes} paquetes  |  {datetime.now().strftime('%H:%M:%S')}")
             else:
                 self.sb.showMessage(f"Conectado — {datetime.now().strftime('%H:%M:%S')}")
 

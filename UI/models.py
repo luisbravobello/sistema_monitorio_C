@@ -32,6 +32,7 @@ class Estadisticas:
     total_paquetes: int
     amenazas_por_tipo: dict
     amenazas_por_severidad: dict
+    capturando: bool
 
     @classmethod
     def from_dict(cls, data: dict) -> "Estadisticas":
@@ -39,4 +40,5 @@ class Estadisticas:
             total_paquetes=data.get("total_paquetes", 0),
             amenazas_por_tipo=data.get("amenazas_por_tipo", {}),
             amenazas_por_severidad=data.get("amenazas_por_severidad", {}),
+            capturando=data.get("capturando", False),
         )
