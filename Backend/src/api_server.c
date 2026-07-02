@@ -19,7 +19,7 @@
   }
   #define pthread_create(t,a,fn,arg) _win_pthread_create(t,fn,arg)
   #define pthread_join(t,v)        WaitForSingleObject(t,INFINITE)
-  /* strtok_r para MinGW */
+  /* Equivalente de strtok_r para entornos MinGW */
   static char *strtok_r(char *s, const char *d, char **p) {
       if (s) *p = s;
       if (!*p) return NULL;
@@ -30,9 +30,10 @@
       if (**p) { **p = '\0'; (*p)++; }
       return tok;
   }
-  /* read/write sobre SOCKET */
+  /* Operaciones de lectura y escritura para SOCKETs en Winsock */
   #define read(s,b,n)  recv(s,(char*)(b),(int)(n),0)
   #define write(s,b,n) send(s,(const char*)(b),(int)(n),0)
+  /* Tipo ssize_t */
   typedef int ssize_t;
 #else
   #include <unistd.h>
@@ -49,41 +50,36 @@
 #include "sort.h"
 #include "viewmodel.h"
 
-/* 
- * api_server.c
- *
- * Servidor HTTP que expone la captura de
- * paquetes y la detección de amenazas vía API REST simple:
- *   POST /start    -> inicia captura en un device
- *   POST /stop     -> detiene captura
- *   GET  /events   -> lista todos los eventos detectados
- *   GET  /alerts   -> eventos ordenados/priorizados
- *   GET  /statistics -> estadísticas agregadas
- *   GET  /search   -> filtra eventos por ip y/o puerto
- *   /clear         -> vacía los eventos guardados
- *
- * Guarda los eventos en un arreglo global (g_events) protegido por
- * mutex, ya que el hilo de captura y el hilo del servidor lo comparten.
- * Atiende una conexión a la vez.
- *  */
+/*
+ Servidor HTTP/ básico con sockets POSIX.
+ Procesa las peticiones una por una de forma secuencial para el flujo de la UI.
+ */
 
 #define MAX_EVENTS       500
 #define REQUEST_BUF_SIZE 8192
 #define DEFAULT_DEVICE   "any"
 
-/* Estado compartido: eventos detectados + mutex de protección. */
+
+// Estado compartido: arreglo de ThreatEvent y su mutex.            
+// Son estáticos y se inicializan automáticamente en memoria,       
+// por lo que no requieren inicialización manual desde main.c.      
+
+
 static ThreatEvent     g_events[MAX_EVENTS];
 static int             g_event_count = 0;
-static pthread_mutex_t g_events_mutex;
+static pthread_mutex_t g_events_mutex; 
 
-static volatile int g_server_running = 0;  /* servidor activo */
-static volatile int g_capturing      = 0;  /* captura activa */
+static volatile int g_server_running = 0;  /* Estado del bucle del servidor */
+static volatile int g_capturing      = 0;  /* Estado de la captura actual */
 static pthread_t    g_capture_thread;
 static char         g_capture_device[64] = DEFAULT_DEVICE;
 
 static int g_listen_fd = -1;
 
-/* ---------- Captura de paquetes ---------- */
+
+// Captura: enlaza con data_reader con detector para analizar los paquetes  
+// y guarda las amenazas encontradas en el arreglo compartido.      
+
 
 void api_server_clear_events(void) {
     pthread_mutex_lock(&g_events_mutex);
@@ -96,7 +92,7 @@ void api_server_add_event(const ThreatEvent *event) {
     if (g_event_count < MAX_EVENTS) {
         g_events[g_event_count++] = *event;
     }
-    /* buffer lleno -> se descarta el evento nuevo */
+    /* Si el buffer se llena, se descartan los eventos nuevos. */
     pthread_mutex_unlock(&g_events_mutex);
 }
 
@@ -109,13 +105,13 @@ static void on_packet_captured(NetworkPacket *packet) {
 
 static void *capture_thread_main(void *arg) {
     (void)arg;
-    /* bloquea hasta que se detenga la captura */
+    /* Inicia y bloquea la ejecución hasta que se detenga la captura de paquetes. */
     data_reader_start_capture(g_capture_device, on_packet_captured);
     g_capturing = 0;
     return NULL;
 }
 
-/* ---------- Parsing HTTP ---------- */
+// HTTP: procesamiento básico de la petición y sus parámetros. 
 
 typedef struct {
     char method[8];
@@ -123,7 +119,7 @@ typedef struct {
     char query[256];
 } HttpRequest;
 
-/* Decodifica %XX y '+' de la URL in-place */
+/* Decodifica caracteres especiales (%XX y '+') de la URL directamente en la cadena. */
 static void url_decode(char *s) {
     char *src = s, *dst = s;
     while (*src) {
@@ -141,7 +137,6 @@ static void url_decode(char *s) {
     *dst = '\0';
 }
 
-/* Busca 'key' en el query string y lo copia decodificado en 'out' */
 static int get_query_param(const char *query, const char *key, char *out, size_t out_size) {
     char buf[256];
     snprintf(buf, sizeof(buf), "%s", query);
@@ -161,7 +156,6 @@ static int get_query_param(const char *query, const char *key, char *out, size_t
     return 0;
 }
 
-/* Parsea "METODO /ruta?query" */
 static int parse_request_line(const char *raw, HttpRequest *req) {
     char path_and_query[512];
     if (sscanf(raw, "%7s %511s", req->method, path_and_query) != 2) {
@@ -178,7 +172,6 @@ static int parse_request_line(const char *raw, HttpRequest *req) {
     return 0;
 }
 
-/* Envía respuesta JSON con status HTTP */
 static void send_response(int client_fd, int status, const char *status_text, const char *body) {
     char header[256];
     int body_len = (int)strlen(body);
@@ -193,7 +186,9 @@ static void send_response(int client_fd, int status, const char *status_text, co
     write(client_fd, body, (size_t)body_len);
 }
 
-/* Handlers  */
+/*  */
+/* Controladores para cada endpoint según docs/API_CONTRACT.md.     */
+/*  */
 
 static void handle_start(int client_fd, const HttpRequest *req) {
     if (strcmp(req->method, "POST") != 0) {
@@ -246,7 +241,7 @@ static void handle_events(int client_fd) {
 
 static void handle_alerts(int client_fd) {
     pthread_mutex_lock(&g_events_mutex);
-    /* copia y ordena internamente, sin alterar g_events */
+    /* Se hace una copia y se ordena internamente para no alterar g_events. */
     char *json = viewmodel_alerts_to_json(g_events, g_event_count);
     pthread_mutex_unlock(&g_events_mutex);
 
@@ -270,7 +265,8 @@ static void handle_search(int client_fd, const HttpRequest *req) {
     int has_port = get_query_param(req->query, "port", port_str, sizeof(port_str));
     int port = has_port ? atoi(port_str) : -1;
 
-    /* filtra el arreglo completo por ip y/o puerto */
+    /* Filtra manualmente el arreglo completo para devolver una lista de eventos 
+     * que coincidan con la IP o el puerto solicitados. */
     pthread_mutex_lock(&g_events_mutex);
 
     ThreatEvent matches[MAX_EVENTS];
@@ -288,7 +284,6 @@ static void handle_search(int client_fd, const HttpRequest *req) {
     free(json);
 }
 
-/* Router:según la ruta solicitada */
 static void route_request(int client_fd, const HttpRequest *req) {
     if (strcmp(req->path, "/start") == 0) {
         handle_start(client_fd, req);
@@ -310,7 +305,6 @@ static void route_request(int client_fd, const HttpRequest *req) {
     }
 }
 
-/* Lee, parsea y manda una conexión de cliente */
 static void handle_client(int client_fd) {
     char buffer[REQUEST_BUF_SIZE];
     ssize_t n = read(client_fd, buffer, sizeof(buffer) - 1);
@@ -338,9 +332,10 @@ static void handle_client(int client_fd) {
     close(client_fd);
 }
 
-/* ---------- Ciclo principal ---------- */
-/* Usa select() con timeout para poder revisar g_server_running */
-/* y cerrarse de forma segura sin quedar bloqueado en accept(). */
+/* ---------------------------------------------------------------- */
+/* Ciclo principal: acepta conexiones usando un timeout para        */
+/* verificar g_server_running y poder cerrarse de forma segura.     */
+/* ---------------------------------------------------------------- */
 
 void api_server_start(int port) {
 #ifdef _WIN32
@@ -392,7 +387,7 @@ void api_server_start(int port) {
             if (errno == EINTR) continue;
             break;
         }
-        if (ready == 0) continue; /* timeout: reintenta */
+        if (ready == 0) continue; /* Timeout: vuelve a comprobar si el servidor sigue corriendo */
 
         struct sockaddr_in client_addr;
         socklen_t client_len = sizeof(client_addr);
