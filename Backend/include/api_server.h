@@ -13,6 +13,9 @@
  * GET /alerts            -> Devuelve las alertas (JSON).
  * GET /statistics        -> Devuelve las estadísticas (JSON).
  * GET /search?ip=&port=  -> Filtra los eventos por IP o puerto.
+ * POST /simulate[?type=ssh_brute|port_scan] -> Inyecta una amenaza de
+ *      prueba sin necesitar trafico real, para probar la pestana de
+ *      Alertas desde la UI.
  */
 void api_server_start(int port);
 

@@ -61,6 +61,9 @@ class ApiClient:
     def clear(self) -> dict:
         return self._post("/clear")
 
+    def simulate_alert(self, tipo: str = "ssh_brute") -> dict:
+        return self._post(f"/simulate?type={tipo}")
+
     def search(self, ip: Optional[str] = None, port: Optional[int] = None) -> list[Evento]:
         params = {}
         if ip:

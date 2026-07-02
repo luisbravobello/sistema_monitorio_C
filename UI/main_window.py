@@ -10,8 +10,11 @@ from PySide6.QtWidgets import (
 from api_client import ApiClient
 import icons
 
-SEV_COLORS = {1:"#4a90d9", 2:"#27ae60", 3:"#f39c12", 4:"#e67e22", 5:"#e74c3c"}
-SEV_LABELS = {1:"Baja",    2:"Media",   3:"Alta",    4:"Crítica", 5:"Máxima"}
+SEV_COLORS = {0:"#7f8c8d", 1:"#4a90d9", 2:"#27ae60", 3:"#f39c12", 4:"#e67e22", 5:"#e74c3c"}
+SEV_LABELS = {0:"Tráfico", 1:"Baja",    2:"Media",   3:"Alta",    4:"Crítica", 5:"Máxima"}
+# "TRAFICO" es el tipo que usa el backend para paquetes normales (sin
+# amenaza detectada). Se excluye al contar "tipos de amenaza detectados".
+NORMAL_TRAFFIC_TYPE = "TRAFICO"
 EV_COLS  = ["#", "IP Origen", "Puerto", "Tipo", "Severidad", "Fecha / Hora"]
 ALT_COLS = ["#", "IP Origen", "Puerto", "Tipo", "Severidad", "Confirmada", "Fecha / Hora"]
 
@@ -184,21 +187,30 @@ class MainWindow(QMainWindow):
         self.stop_btn.setEnabled(False)
         self.clear_btn = QPushButton("Limpiar")
         self.clear_btn.setIcon(icons.icon_trash())
+        self.sim_btn = QPushButton("Simular ataque (prueba)")
+        self.sim_btn.setIcon(icons.icon_alert())
+        self.sim_btn.setToolTip(
+            "Inyecta una amenaza de prueba directo en el backend, sin "
+            "necesitar tráfico de red real. Útil para probar la pestaña "
+            "de Alertas sin depender de tu WiFi/router."
+        )
         self.start_btn.clicked.connect(self._on_start)
         self.stop_btn.clicked.connect(self._on_stop)
         self.clear_btn.clicked.connect(self._on_clear)
+        self.sim_btn.clicked.connect(self._on_simulate)
         top.addWidget(self.start_btn)
         top.addWidget(self.stop_btn)
         top.addWidget(self.clear_btn)
+        top.addWidget(self.sim_btn)
         top.addStretch()
         root.addLayout(top)
 
         # ── Tarjetas ─────────────────────────────────────────────────
         sr = QHBoxLayout(); sr.setSpacing(8)
-        self._c_total  = self._card("Total eventos",    "—", "#4a90d9")
-        self._c_alerts = self._card("Alertas activas",  "—", "#e74c3c")
-        self._c_high   = self._card("Severidad",    "—", "#e67e22")
-        self._c_types  = self._card("Tipos detectados", "—", "#27ae60")
+        self._c_total  = self._card("Paquetes capturados", "—", "#4a90d9")
+        self._c_alerts = self._card("Alertas activas",     "—", "#e74c3c")
+        self._c_high   = self._card("Severidad alta",      "—", "#e67e22")
+        self._c_types  = self._card("Tipos de amenaza",    "—", "#27ae60")
         for c in [self._c_total, self._c_alerts, self._c_high, self._c_types]:
             sr.addWidget(c)
         root.addLayout(sr)
@@ -224,7 +236,7 @@ class MainWindow(QMainWindow):
         self.ev_view   = _make_view(self._ev_model)
         self.ev_view.doubleClicked.connect(self._detail_event)
         le.addWidget(self.ev_view)
-        tabs.addTab(te, icons.icon_events(), "Eventos")
+        tabs.addTab(te, icons.icon_events(), "Tráfico")
 
         # Tab alertas
         ta = QWidget(); la = QVBoxLayout(ta); la.setSpacing(4)
@@ -330,7 +342,7 @@ class MainWindow(QMainWindow):
                 self._ev_model.replace(self._events)
                 self._alt_model.replace(self._alerts)
                 high  = sum(1 for e in self._events if e['severidad'] >= 4)
-                tipos = len(set(e['tipo'] for e in self._events))
+                tipos = len({e['tipo'] for e in self._events if e['tipo'] != NORMAL_TRAFFIC_TYPE})
                 self._c_total._v.setText(str(len(self._events)))
                 self._c_alerts._v.setText(str(len(self._alerts)))
                 self._c_high._v.setText(str(high))
@@ -364,6 +376,12 @@ class MainWindow(QMainWindow):
         elif action == "clear_done":
             self._clear_ui()
             self.sb.showMessage("Registros limpiados")
+
+        elif action == "simulate":
+            tipo = result.get("tipo", "amenaza") if isinstance(result, dict) else "amenaza"
+            self.sb.showMessage(f"Amenaza simulada: {tipo} — revisa la pestaña Alertas")
+            self._last_hash = (-1, -1)  # fuerza refresco aunque el conteo no haya cambiado aun
+            self._refresh()
 
         elif action == "filter_alerts":
             self._alt_model.replace(result)
@@ -407,6 +425,10 @@ class MainWindow(QMainWindow):
 
     def _on_clear(self):
         self._run_aux(self.api.clear, "clear_done")
+
+    def _on_simulate(self):
+        self.sb.showMessage("Simulando amenaza de prueba…")
+        self._run_aux(lambda: self.api.simulate_alert("ssh_brute"), "simulate")
 
     def _on_start(self):
         self.start_btn.setEnabled(False)

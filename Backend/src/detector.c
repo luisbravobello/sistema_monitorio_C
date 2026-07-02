@@ -10,9 +10,9 @@
  */
 
 #define HISTORY_SIZE 256
-#define WINDOW_SECS  10
-#define PORTSCAN_THRESHOLD  5   /* Puertos distintos en la ventana */
-#define SSHBRUTE_THRESHOLD  4   /* Conexiones al puerto 22 en la ventana */
+#define WINDOW_SECS  15
+#define PORTSCAN_THRESHOLD  4   /* Puertos distintos en la ventana */
+#define SSHBRUTE_THRESHOLD  3   /* Conexiones al puerto 22 en la ventana */
 
 typedef struct {
     char   src_ip[46];
