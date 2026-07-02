@@ -290,9 +290,18 @@ class MainWindow(QMainWindow):
     # ── Handler central ───────────────────────────────────────────────
     def _on_done(self, result, action):
         if isinstance(result, dict) and "error" in result:
-            if action in ("start", "stop"):
-                self.sb.showMessage(f"Error: {result['error']}")
+            if action == "start":
+                self.sb.showMessage(f"Error al iniciar: {result['error']}")
+                self.start_btn.setText("Iniciar captura")
                 self.start_btn.setEnabled(True)
+                self.stop_btn.setEnabled(False)
+            elif action == "stop":
+                self.sb.showMessage(f"Error al detener: {result['error']}")
+                self.stop_btn.setText("Detener")
+                # La captura sigue corriendo en el backend: dejamos
+                # "Detener" disponible para reintentar, no "Iniciar".
+                self.stop_btn.setEnabled(True)
+                self.start_btn.setEnabled(False)
             return
 
         if action == "refresh":
@@ -334,12 +343,16 @@ class MainWindow(QMainWindow):
                 self.sb.showMessage(f"Conectado — {datetime.now().strftime('%H:%M:%S')}")
 
         elif action == "start":
+            self.start_btn.setText("Iniciar captura")
+            self.stop_btn.setText("Detener")
             self.stop_btn.setEnabled(True)
             self.sb.showMessage("Capturando…")
             self._last_hash = (-1, -1)
             self._refresh()
 
         elif action == "stop":
+            self.start_btn.setText("Iniciar captura")
+            self.stop_btn.setText("Detener")
             self.start_btn.setEnabled(True)
             self.stop_btn.setEnabled(False)
             self._clear_ui()
@@ -397,10 +410,18 @@ class MainWindow(QMainWindow):
 
     def _on_start(self):
         self.start_btn.setEnabled(False)
+        self.start_btn.setText("Iniciando…")
+        # Habilitamos "Detener" de una vez: si el usuario se arrepiente
+        # mientras esperamos la respuesta del backend (hasta 3s), puede
+        # cancelar sin quedar bloqueado esperando.
+        self.stop_btn.setEnabled(True)
+        self.sb.showMessage("Iniciando captura…")
         self._run_aux(self.api.start, "start")
 
     def _on_stop(self):
         self.stop_btn.setEnabled(False)
+        self.stop_btn.setText("Deteniendo…")
+        self.sb.showMessage("Deteniendo captura…")
         self._run_aux(self.api.stop, "stop")
 
     # ── Cleanup ──────────────────────────────────────────────────────
