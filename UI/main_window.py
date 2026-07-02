@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox, QFormLayout, QFrame,
 )
 from api_client import ApiClient
+import icons
 
 SEV_COLORS = {1:"#4a90d9", 2:"#27ae60", 3:"#f39c12", 4:"#e67e22", 5:"#e74c3c"}
 SEV_LABELS = {1:"Baja",    2:"Media",   3:"Alta",    4:"Crítica", 5:"Máxima"}
@@ -111,6 +112,7 @@ class DetailDialog(QDialog):
     def __init__(self, event, parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"Detalle — Evento #{event['id']}")
+        self.setWindowIcon(icons.icon_app(size=32))
         self.setMinimumWidth(400)
         lay = QFormLayout(self)
         lay.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
@@ -159,6 +161,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Monitor de Amenazas en Red")
+        self.setWindowIcon(icons.icon_app(size=48))
         self.resize(1100, 680)
         self.api          = ApiClient()
         self._worker      = None
@@ -174,10 +177,13 @@ class MainWindow(QMainWindow):
 
         # ── Botones ──────────────────────────────────────────────────
         top = QHBoxLayout()
-        self.start_btn = QPushButton("▶  Iniciar captura")
-        self.stop_btn  = QPushButton("■  Detener")
+        self.start_btn = QPushButton("Iniciar captura")
+        self.start_btn.setIcon(icons.icon_play())
+        self.stop_btn  = QPushButton("Detener")
+        self.stop_btn.setIcon(icons.icon_stop())
         self.stop_btn.setEnabled(False)
-        self.clear_btn = QPushButton("🗑  Limpiar")
+        self.clear_btn = QPushButton("Limpiar")
+        self.clear_btn.setIcon(icons.icon_trash())
         self.start_btn.clicked.connect(self._on_start)
         self.stop_btn.clicked.connect(self._on_stop)
         self.clear_btn.clicked.connect(self._on_clear)
@@ -218,7 +224,7 @@ class MainWindow(QMainWindow):
         self.ev_view   = _make_view(self._ev_model)
         self.ev_view.doubleClicked.connect(self._detail_event)
         le.addWidget(self.ev_view)
-        tabs.addTab(te, "📋  Eventos")
+        tabs.addTab(te, icons.icon_events(), "Eventos")
 
         # Tab alertas
         ta = QWidget(); la = QVBoxLayout(ta); la.setSpacing(4)
@@ -236,7 +242,7 @@ class MainWindow(QMainWindow):
         self.alt_view   = _make_view(self._alt_model)
         self.alt_view.doubleClicked.connect(self._detail_alert)
         la.addWidget(self.alt_view)
-        tabs.addTab(ta, "🚨  Alertas")
+        tabs.addTab(ta, icons.icon_alert(), "Alertas")
 
         root.addWidget(tabs)
         self.setCentralWidget(central)

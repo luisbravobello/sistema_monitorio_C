@@ -2,9 +2,11 @@ import sys
 from PySide6.QtWidgets import QApplication
 from splash import SplashScreen
 from main_window import MainWindow
+import icons
 
 def main():
     app = QApplication(sys.argv)
+    app.setWindowIcon(icons.icon_app())
 
     # Ventana en una lista para evitar que el Garbage Collector la borre
     ventana_principal = []
