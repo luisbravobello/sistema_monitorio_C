@@ -11,7 +11,7 @@ from api_client import ApiClient
 import icons
 
 SEV_COLORS = {0:"#7f8c8d", 1:"#4a90d9", 2:"#27ae60", 3:"#f39c12", 4:"#e67e22", 5:"#e74c3c"}
-SEV_LABELS = {0:"Tráfico", 1:"Baja",    2:"Media",   3:"Alta",    4:"Crítica", 5:"Máxima"}
+SEV_LABELS = {0:"sin amenazas", 1:"Baja",    2:"Media",   3:"Alta",    4:"Crítica", 5:"Máxima"}
 # "TRAFICO" es el tipo que usa el backend para paquetes normales (sin
 # amenaza detectada). Se excluye al contar "tipos de amenaza detectados".
 NORMAL_TRAFFIC_TYPE = "TRAFICO"
