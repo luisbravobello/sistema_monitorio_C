@@ -55,6 +55,7 @@
 #include "data_reader.h"
 #include "detector.h"
 #include "sort.h"
+#include "search.h"
 #include "viewmodel.h"
 
 /*
@@ -404,6 +405,10 @@ static void handle_events(int client_fd) {
     int n = snapshot_events_locked(snap, MAX_EVENTS);
     pthread_mutex_unlock(&g_events_mutex);
 
+    /* RF-06: los eventos se devuelven ordenados por timestamp ascendente
+     * (ordenamiento por inserción), del más antiguo al más reciente. */
+    sort_by_timestamp(snap, n);
+
     char *json = viewmodel_events_to_json(snap, n);
     free(snap);
     send_response(client_fd, 200, "OK", json);
@@ -497,8 +502,10 @@ static void handle_simulate(int client_fd, const HttpRequest *req) {
 static void handle_search(int client_fd, const HttpRequest *req) {
     char ip[IP_STR_LEN] = "";
     char port_str[16] = "";
+    char ts_str[32] = "";
     int has_ip = get_query_param(req->query, "ip", ip, sizeof(ip));
     int has_port = get_query_param(req->query, "port", port_str, sizeof(port_str));
+    int has_ts = get_query_param(req->query, "timestamp", ts_str, sizeof(ts_str));
     int port = has_port ? atoi(port_str) : -1;
 
     ThreatEvent *snap = malloc((size_t)MAX_EVENTS * sizeof(ThreatEvent));
@@ -514,11 +521,47 @@ static void handle_search(int client_fd, const HttpRequest *req) {
     pthread_mutex_unlock(&g_events_mutex);
 
     int match_count = 0;
-    for (int i = 0; i < n; i++) {
-        if (has_ip && strcmp(snap[i].packet.src_ip, ip) != 0) continue;
-        if (has_port && snap[i].packet.dst_port != port) continue;
-        matches[match_count++] = snap[i];
+
+    if (has_ts) {
+        /* RF-09: búsqueda binaria por timestamp. Requiere el arreglo
+         * previamente ordenado por sort_by_timestamp(). */
+        time_t ts = (time_t)atol(ts_str);
+        sort_by_timestamp(snap, n);
+        int idx = search_binary_by_timestamp(snap, n, ts);
+        if (idx != -1) {
+            /* Puede haber varios eventos con el mismo timestamp; como el
+             * arreglo ya está ordenado, se expande hacia ambos lados desde
+             * la posición hallada por la búsqueda binaria para incluirlos
+             * todos, y luego se filtra por ip/port si corresponden. */
+            int lo = idx, hi = idx;
+            while (lo > 0 && snap[lo - 1].packet.timestamp == ts) lo--;
+            while (hi < n - 1 && snap[hi + 1].packet.timestamp == ts) hi++;
+            for (int i = lo; i <= hi; i++) {
+                if (has_ip && strcmp(snap[i].packet.src_ip, ip) != 0) continue;
+                if (has_port && snap[i].packet.dst_port != port) continue;
+                matches[match_count++] = snap[i];
+            }
+        }
+    } else if (has_ip && !has_port) {
+        /* RF-08: búsqueda lineal por IP de origen. search_linear_by_ip
+         * devuelve la primera coincidencia; se repite desde la siguiente
+         * posición para recolectar todas las coincidencias del arreglo. */
+        int start = 0;
+        while (start < n) {
+            int idx = search_linear_by_ip(snap + start, n - start, ip);
+            if (idx == -1) break;
+            matches[match_count++] = snap[start + idx];
+            start += idx + 1;
+        }
+    } else {
+        /* Filtro combinado (ip + port, solo port, o sin filtros). */
+        for (int i = 0; i < n; i++) {
+            if (has_ip && strcmp(snap[i].packet.src_ip, ip) != 0) continue;
+            if (has_port && snap[i].packet.dst_port != port) continue;
+            matches[match_count++] = snap[i];
+        }
     }
+
     char *json = viewmodel_events_to_json(matches, match_count);
     free(snap); free(matches);
 
