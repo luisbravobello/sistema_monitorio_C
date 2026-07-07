@@ -1,17 +1,22 @@
 # Sistema de Monitoreo de Amenazas de Red
 
-Sistema de monitoreo de tráfico de red en tiempo real, capaz de detectar amenazas como escaneos de puertos y ataques de fuerza bruta por SSH. El proyecto está dividido en dos capas: un **backend en C** que actúa como servidor HTTP, y una **UI en Python** que consume su API REST.
-
----
+Sistema de monitoreo de tráfico de red en tiempo real, capaz de detectar amenazas como escaneos de puertos y ataques de fuerza bruta por SSH. Backend en **C** (servidor HTTP + motor de detección) y UI en **Python** que consume su API REST.
 
 ## Autores
 
 | Rol | Nombre |
-|-----|--------|
-| Lógica / Backend | Luis Alejandro Bravo Bello |
-| Interfaz de Usuario (UI) | Ronald Alberto Reyes Sánchez |
+|---|---|
+| Backend | Luis Alejandro Bravo Bello |
+| UI | Ronald Alberto Reyes Sánchez |
 
----
+## Características principales
+
+- Captura en vivo (libpcap) o lectura desde archivo de log.
+- Detección de `PORT_SCAN` y `SSH_BRUTE` por ventana de tiempo (10 s).
+- Ordenamiento de eventos por timestamp y por severidad (inserción).
+- Búsqueda de eventos por IP (lineal) y por timestamp (binaria).
+- API REST en `localhost:8080` consumida por la UI en Python.
+
 
 ## Estructura del proyecto
 
@@ -118,75 +123,35 @@ El historial interno mantiene las últimas **256 entradas** en un buffer circula
 
 ---
 
-## Búsqueda y ordenamiento
+## Compilación y ejecución
 
-**Búsqueda (`search.c`)**
-- `search_linear_by_ip` — búsqueda secuencial por IP de origen.
-- `search_binary_by_timestamp` — búsqueda binaria por timestamp (requiere el arreglo ordenado previamente con `sort_by_timestamp`).
-
-**Ordenamiento (`sort.c`)**
-- `sort_by_timestamp` — del evento más antiguo al más reciente.
-- `sort_by_severity` — del más crítico al más leve.
-
----
-
-## Formato de log
-
-Para cargar paquetes desde archivo, cada línea debe seguir este formato:
-
-```
-timestamp src_ip src_port dst_ip dst_port protocol size
-```
-
-Ejemplo:
-```
-1700000000 192.168.1.10 54321 10.0.0.1 22 TCP 64
-1700000005 192.168.1.10 54322 10.0.0.1 22 TCP 64
-# Las líneas que empiezan con # o vacías se ignoran
-```
-
----
-
-## Compilación
-
-### Requisitos
-
-- GCC (MinGW en Windows) o cualquier compilador C11
-- *(Opcional)* `libpcap` para captura en vivo real
-
-### En Windows (MinGW)
-
+**Windows (MinGW):**
 ```bash
-gcc -std=c11 -Iinclude src/*.c -o monitor -lws2_32
+gcc -std=c11 -Iinclude src/*.c -o monitor.exe -lws2_32
+./monitor.exe
 ```
 
-Con pcap:
-
+**Linux/macOS:**
 ```bash
-gcc -std=c11 -Iinclude -DHAVE_PCAP src/*.c -o monitor -lws2_32 -lwpcap
-```
-
-## Ejecución
-
-```bash
-# Backend
+gcc -std=c11 -Iinclude src/*.c -o monitor -lpthread
 ./monitor
-# → Monitor de Amenazas — servidor escuchando en http://localhost:8080
+```
 
-# UI (en otra terminal)
+# Backend (C)
+```bash
+cd Backend
+gcc -Wall -Iinclude src/main.c src/api_server.c src/data_reader.c src/detector.c src/search.c src/sort.c src/viewmodel.c -o monitor.exe -lws2_32
+.\monitor.exe
+```
+# UI (Python) 
+```bash
 cd UI
 pip install -r requirements.txt
 python main.py
 ```
 
----
+> Compilar con `-DHAVE_PCAP` (y enlazar `-lwpcap`/`-lpcap`) habilita la captura real de tráfico; si no, el sistema usa un simulador interno.
 
-## Dependencias externas
+## Documentación completa
 
-| Componente | Dependencia | Obligatoria |
-|------------|-------------|-------------|
-| Backend C | `libpcap` / `WinPcap` | No (hay simulador interno) |
-| Backend C | `pthreads` / `Winsock2` | Sí |
-| UI Python | Ver `UI/requirements.txt` | Sí |
-
-> **Nota:** Si `libpcap` no está instalada, el backend activa automáticamente un simulador de paquetes para pruebas sin necesidad de privilegios de red.
+Para la especificación de requisitos, arquitectura, diseño y decisiones técnicas, ver [`docs/Documentacion.md`](docs/Documentacion.md).
