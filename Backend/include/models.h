@@ -5,7 +5,7 @@
 
 /*
  * Estructuras centrales compartidas en todo el backend C.
- * Importante: Si modificas estos campos, actualiza docs/API_CONTRACT.md y models.py para no romper el formato JSON.
+ * Importante: Si modificas estos campos, actualiza docs/Documentacion.md (sección 3.4) y UI/models.py para no romper el formato JSON.
  */
 
 #define IP_STR_LEN      46   /* Capacidad para IPv4 e IPv6 */

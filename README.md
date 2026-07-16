@@ -12,7 +12,7 @@ Sistema de monitoreo de tráfico de red en tiempo real, capaz de detectar amenaz
 ## Características principales
 
 - Captura en vivo (libpcap) o lectura desde archivo de log.
-- Detección de `PORT_SCAN` y `SSH_BRUTE` por ventana de tiempo (10 s).
+- Detección de `PORT_SCAN` y `SSH_BRUTE` por ventana de tiempo (15 s).
 - Ordenamiento de eventos por timestamp y por severidad (inserción).
 - Búsqueda de eventos por IP (lineal) y por timestamp (binaria).
 - API REST en `localhost:8080` consumida por la UI en Python.
@@ -101,25 +101,28 @@ El servidor escucha en `http://localhost:8080`.
 
 | Método | Ruta | Descripción |
 |--------|------|-------------|
-| `POST` | `/start?device=X` | Inicia la captura de paquetes en la interfaz `X` |
+| `POST` | `/start?device=X` | Inicia la captura de paquetes en la interfaz `X` (síncrono: si falla, devuelve el error real) |
 | `POST` | `/stop` | Detiene la captura |
-| `GET` | `/events` | Retorna todos los eventos detectados (JSON) |
+| `GET` | `/events` | Retorna todos los eventos detectados, ordenados por timestamp ascendente (JSON) |
 | `GET` | `/alerts` | Retorna solo las amenazas confirmadas, ordenadas por severidad (JSON) |
 | `GET` | `/statistics` | Resumen general: cantidad de paquetes, tipos de ataque, niveles de severidad (JSON) |
-| `GET` | `/search?ip=&port=` | Filtra eventos por IP de origen o puerto |
+| `GET` | `/search?ip=&port=&timestamp=` | Filtra eventos por IP de origen, puerto o timestamp exacto (búsqueda binaria) |
+| `GET` | `/devices` | Lista las interfaces reales detectadas por Npcap/libpcap y el flag `real_capture` |
+| `POST` | `/clear` | Limpia todos los eventos y alertas almacenados en memoria |
+| `POST` | `/simulate?type=` | Genera una alerta de prueba (`ssh_brute` o `port_scan`) sin necesidad de tráfico real |
 
 ---
 
 ## Motor de detección
 
-El detector (`detector.c`) usa una **ventana deslizante de 10 segundos** para identificar patrones de ataque provenientes de una misma IP:
+El detector (`detector.c`) usa una **ventana deslizante de 15 segundos** para identificar patrones de ataque provenientes de una misma IP:
 
 | Amenaza | Condición | Severidad | Estado |
 |---------|-----------|-----------|--------|
-| `PORT_SCAN` | ≥ 5 puertos distintos en 10 s | 3 | Sospecha |
-| `SSH_BRUTE` | ≥ 4 conexiones al puerto 22 en 10 s | 4 | Confirmado |
+| `PORT_SCAN` | ≥ 4 puertos distintos en 15 s | 3 | Sospecha |
+| `SSH_BRUTE` | ≥ 3 conexiones al puerto 22 en 15 s | 4 | Confirmado |
 
-El historial interno mantiene las últimas **256 entradas** en un buffer circular.
+El historial interno mantiene las últimas **256 entradas** en un buffer circular. Los eventos confirmados se guardan en un arreglo de hasta **5000 posiciones** (`MAX_EVENTS`) y las alertas en uno de hasta **1000** (`MAX_ALERTS`).
 
 ---
 
